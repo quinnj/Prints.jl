@@ -2,7 +2,7 @@ module Prints
 
 using Ryu
 
-export @printf, @sprintf
+export @printf, @sprintf, Format, format, @format
 
 const Ints = Union{Val{'d'}, Val{'i'}, Val{'u'}, Val{'x'}, Val{'X'}, Val{'o'}}
 const Floats = Union{Val{'e'}, Val{'E'}, Val{'f'}, Val{'F'}, Val{'g'}, Val{'G'}, Val{'a'}, Val{'A'}}
@@ -20,6 +20,12 @@ struct Spec{T} # T => %type => Val{'type'}
     width::Int
     precision::Int
 end
+
+Base.string(f::Spec{T}; bigfloat::Bool=false) where {T} =
+    string("%", f.leftalign ? "-" : "", f.plus ? "+" : "", f.space ? " " : "",
+        f.zero ? "0" : "", f.hash ? "#" : "", f.width > 0 ? f.width : "",
+        f.precision == 0 ? ".0" : f.precision > 0 ? ".$(f.precision)" : "", bigfloat ? "R" : "", char(T))
+Base.show(io::IO, f::Spec) = print(io, string(f))
 
 ptrfmt(s::Spec{T}, x) where {T} =
     Spec{Val{'x'}}(s.leftalign, s.plus, s.space, s.zero, true, s.width, sizeof(x) == 8 ? 16 : 8)
@@ -122,6 +128,8 @@ function Format(f::AbstractString)
             zero = false
         elseif (type <: Strings || type <: Chars) && !parsedprecdigits
             precision = -1
+        elseif type <: Union{Val{'a'}, Val{'A'}} && !parsedprecdigits
+            precision = -1
         elseif type <: Floats && !parsedprecdigits
             precision = 6
         end
@@ -187,21 +195,37 @@ end
 
 # strings
 @inline function fmt(buf, pos, arg, spec::Spec{T}) where {T <: Strings}
-    leftalign, width, prec = spec.leftalign, spec.width, spec.precision
+    leftalign, hash, width, prec = spec.leftalign, spec.hash, spec.width, spec.precision
     str = string(arg)
-    p = prec == -1 ? length(str) : prec
+    op = p = prec == -1 ? (length(str) + (hash ? arg isa AbstractString ? 2 : 1 : 0)) : prec
     if !leftalign && width > p
         for _ = 1:(width - p)
             buf[pos] = UInt8(' ')
             pos += 1
         end
     end
-    for (i, c) in enumerate(str)
-        i > p && break
-        pos = writechar(buf, pos, c)
+    if hash
+        if arg isa Symbol
+            buf[pos] = UInt8(':')
+            pos += 1
+            p -= 1
+        elseif arg isa AbstractString
+            buf[pos] = UInt8('"')
+            pos += 1
+            p -= 1
+        end
     end
-    if leftalign && width > p
-        for _ = 1:(width - p)
+    for c in str
+        p == 0 && break
+        pos = writechar(buf, pos, c)
+        p -= 1
+    end
+    if hash && arg isa AbstractString && p > 0
+        buf[pos] = UInt8('"')
+        pos += 1
+    end
+    if leftalign && width > op
+        for _ = 1:(width - op)
             buf[pos] = UInt8(' ')
             pos += 1
         end
@@ -214,8 +238,9 @@ end
     leftalign, plus, space, zero, hash, width, prec =
         spec.leftalign, spec.plus, spec.space, spec.zero, spec.hash, spec.width, spec.precision
     bs = base(T)
-    n = i = ndigits(arg, base=bs, pad=1)
-    x, neg = arg < 0 ? (-arg, true) : (arg, false)
+    arg2 = arg isa AbstractFloat ? Integer(trunc(arg)) : arg
+    n = i = ndigits(arg2, base=bs, pad=1)
+    x, neg = arg2 < 0 ? (-arg2, true) : (arg2, false)
     arglen = n + (neg || (plus | space)) +
         (T == Val{'o'} && hash ? 2 : 0) +
         (T == Val{'x'} && hash ? 2 : 0) + (T == Val{'X'} && hash ? 2 : 0)
@@ -291,19 +316,110 @@ end
 @inline function fmt(buf, pos, arg, spec::Spec{T}) where {T <: Floats}
     leftalign, plus, space, zero, hash, width, prec =
         spec.leftalign, spec.plus, spec.space, spec.zero, spec.hash, spec.width, spec.precision
-    x = float(arg)
+    if arg isa BigFloat && !isnan(arg) && isfinite(arg)
+        lng = ccall((:mpfr_snprintf, :libmpfr), Int32,
+                (Ptr{UInt8}, Culong, Ptr{UInt8}, Ref{BigFloat}),
+                buf, length(buf), string(spec, bigfloat=true), arg)
+        lng > 0 || error("invalid printf formatting for BigFloat")
+        return lng + 1
+    end
+    x = Float64(arg)
     if T <: Union{Val{'e'}, Val{'E'}}
         newpos = Ryu.writeexp(buf, pos, x, plus, space, hash, prec, char(T), UInt8('.'))
     elseif T <: Union{Val{'f'}, Val{'F'}}
         newpos = Ryu.writefixed(buf, pos, x, plus, space, hash, prec, UInt8('.'))
     elseif T <: Union{Val{'g'}, Val{'G'}}
-        exp = exponent(arg)
         prec = prec == 0 ? 1 : prec
         x = round(x, sigdigits=prec)
-        if exp < -4 || exp >= prec
-            newpos = Ryu.writeexp(buf, pos, x, plus, space, hash, prec, T == Val('g') ? UInt8('e') : UInt8('E'), UInt8('.'))
+        newpos = Ryu.writeshortest(buf, pos, x, plus, space, hash, prec, T == Val{'g'} ? UInt8('e') : UInt8('E'), true, UInt8('.'))
+    elseif T <: Union{Val{'a'}, Val{'A'}}
+        x, neg = x < 0 ? (-x, true) : (x, false)
+        newpos = pos
+        if neg
+            buf[newpos] = UInt8('-')
+            newpos += 1
+        elseif plus
+            buf[newpos] = UInt8('+')
+            newpos += 1
+        elseif space
+            buf[newpos] = UInt8(' ')
+            newpos += 1
+        end
+        if isnan(x)
+            buf[newpos] = UInt8('N')
+            buf[newpos + 1] = UInt8('a')
+            buf[newpos + 2] = UInt8('N')
+            newpos += 3
+        elseif !isfinite(x)
+            buf[newpos] = UInt8('I')
+            buf[newpos + 1] = UInt8('n')
+            buf[newpos + 2] = UInt8('f')
+            newpos += 3
         else
-            newpos = Ryu.writefixed(buf, pos, x, plus, space, hash, prec, UInt8('.'), true)
+            buf[newpos] = UInt8('0')
+            newpos += 1
+            buf[newpos] = T <: Val{'a'} ? UInt8('x') : UInt8('X')
+            newpos += 1
+            if arg == 0
+                buf[newpos] = UInt8('0')
+                newpos += 1
+                if prec > 0
+                    while prec > 0
+                        buf[newpos] = UInt8('0')
+                        newpos += 1
+                        prec -= 1
+                    end
+                end
+                buf[newpos] = T <: Val{'a'} ? UInt8('p') : UInt8('P')
+                buf[newpos + 1] = UInt8('+')
+                buf[newpos + 2] = UInt8('0')
+            else
+                if prec > -1
+                    s, p = frexp(x)
+                    sigbits = 4 * min(prec, 13)
+                    s = 0.25 * round(ldexp(s, 1 + sigbits))
+                    # ensure last 2 exponent bits either 01 or 10
+                    u = (reinterpret(UInt64, s) & 0x003f_ffff_ffff_ffff) >> (52 - sigbits)
+                    i = n = (sizeof(u) << 1) - (leading_zeros(u) >> 2)
+                else
+                    s, p = frexp(x)
+                    s *= 2.0
+                    u = (reinterpret(UInt64, s) & 0x001f_ffff_ffff_ffff)
+                    t = (trailing_zeros(u) >> 2)
+                    u >>= (t << 2)
+                    i = n = 14 - t
+                end
+                frac = u > 9 || hash || prec > 0
+                while i > 1
+                    buf[newpos + i] = T == Val{'a'} ? hex[(u & 0x0f) + 1] : HEX[(u & 0x0f) + 1]
+                    u >>= 4
+                    i -= 1
+                    prec -= 1
+                end
+                if frac
+                    buf[newpos + 1] = UInt8('.')
+                end
+                buf[newpos] = T == Val{'a'} ? hex[(u & 0x0f) + 1] : HEX[(u & 0x0f) + 1]
+                newpos += n + frac
+                while prec > 0
+                    buf[newpos] = UInt8('0')
+                    newpos += 1
+                    prec -= 1
+                end
+                buf[newpos] = T <: Val{'a'} ? UInt8('p') : UInt8('P')
+                newpos += 1
+                p -= 1
+                buf[newpos] = p < 0 ? UInt8('-') : UInt8('+')
+                p = p < 0 ? -p : p
+                newpos += 1
+                n = i = ndigits(p, base=10, pad=1)
+                while i > 0
+                    buf[newpos + i - 1] = 48 + rem(p, 10)
+                    p = oftype(p, div(p, 10))
+                    i -= 1
+                end
+                newpos += n
+            end
         end
     end
     if newpos - pos < width
@@ -318,7 +434,7 @@ end
             # right aligned
             n = width - (newpos - pos)
             if zero
-                ex = (arg < 0 || (plus | space))
+                ex = (arg < 0 || (plus | space)) + (T <: Union{Val{'a'}, Val{'A'}} ? 2 : 0)
                 so = pos + ex
                 len = (newpos - pos) - ex
                 unsafe_copyto!(buf, so + n, buf, so, len)
@@ -339,9 +455,9 @@ end
 end
 
 # pointers
-fmt(buf, pos, arg, spec::Spec{Pointer}) = fmt(buf, pos, Int(arg), ptrfmt(spec))
+fmt(buf, pos, arg, spec::Spec{Pointer}) = fmt(buf, pos, Int(arg), ptrfmt(spec, arg))
 
-@inline function format(buf, pos, f::Format, args...)
+@inline function format(buf::Vector{UInt8}, pos::Integer, f::Format, args...)
     # write out first substring
     for i in f.substrings[1]
         @inbounds buf[pos] = f.str[i]
@@ -380,7 +496,7 @@ plength(::Type{T}) where {T} = 0
 
 plength(x::Float16) = 9 + 5
 plength(x::Float32) = 39 + 9
-plength(x::Float64) = 309 + 17
+plength(x::Union{Float64, BigFloat}) = 309 + 17
 plength(x::Real) = plength(float(x))
 plength(x::Integer) = ndigits(x, base=10)
 plength(c::Char) = ncodeunits(c)
@@ -427,17 +543,17 @@ macro printf(io_or_fmt, fmt_or_first_arg, args...)
     if io_or_fmt isa String
         io = stdout
         fmt = Format(io_or_fmt)
-        return :(Prints.format($io, $fmt, $fmt_or_first_arg, $(args...)))
+        return esc(:(Prints.format($io, $fmt, $fmt_or_first_arg, $(args...))))
     else
         io = io_or_fmt
         fmt = Format(fmt_or_first_arg)
-        return :(Prints.format($io, $fmt, $(args...)))
+        return esc(:(Prints.format($io, $fmt, $(args...))))
     end
 end
 
 macro sprintf(fmt, args...)
     f = Format(fmt)
-    return :(Prints.format($f, $(args...)))
+    return esc(:(Prints.format($f, $(args...))))
 end
 
 end # module

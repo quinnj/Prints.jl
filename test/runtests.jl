@@ -1,12 +1,86 @@
 using Test, Prints
 
-# TODO
- # %a
- # tests %p
- # tests %g
- # different types for existing tests
- # BigFloat
- # %s "alternate" forms for String/Symbol
+@testset "%p" begin
+
+    # pointers
+    if Sys.WORD_SIZE == 64
+        @test (Prints.@sprintf "%20p" 0) == "  0x0000000000000000"
+        @test (Prints.@sprintf "%-20p" 0) == "0x0000000000000000  "
+    elseif Sys.WORD_SIZE == 32
+        @test (Prints.@sprintf "%20p" 0) == "          0x00000000"
+        @test (Prints.@sprintf "%-20p" 0) == "0x00000000          "
+    end
+
+end
+
+@testset "%a" begin
+
+    # hex float
+    @test (Prints.@sprintf "%a" 1.5) == "0x1.8p+0"
+    @test (Prints.@sprintf "%a" 1.5f0) == "0x1.8p+0"
+    @test (Prints.@sprintf "%a" big"1.5") == "0x1.8p+0"
+    @test (Prints.@sprintf "%#.0a" 1.5) == "0x2.p+0"
+    @test (Prints.@sprintf "%+30a" 1/3) == "         +0x1.5555555555555p-2"
+
+    @test Prints.@sprintf("%a", 1.5) == "0x1.8p+0"
+    @test Prints.@sprintf("%a", 3.14) == "0x1.91eb851eb851fp+1"
+    @test Prints.@sprintf("%.0a", 3.14) == "0x2p+1"
+    @test Prints.@sprintf("%.1a", 3.14) == "0x1.9p+1"
+    @test Prints.@sprintf("%.2a", 3.14) == "0x1.92p+1"
+    @test Prints.@sprintf("%#a", 3.14) == "0x1.91eb851eb851fp+1"
+    @test Prints.@sprintf("%#.0a", 3.14) == "0x2.p+1"
+    @test Prints.@sprintf("%#.1a", 3.14) == "0x1.9p+1"
+    @test Prints.@sprintf("%#.2a", 3.14) == "0x1.92p+1"
+    @test Prints.@sprintf("%.6a", 1.5) == "0x1.800000p+0"
+
+end
+
+@testset "%g" begin
+
+    # %g
+    for (val, res) in ((12345678., "1.23457e+07"),
+                    (1234567.8, "1.23457e+06"),
+                    (123456.78, "123457"),
+                    (12345.678, "12345.7"),
+                    (12340000.0, "1.234e+07"))
+        @test (Prints.@sprintf("%.6g", val) == res)
+    end
+    for (val, res) in ((big"12345678.", "1.23457e+07"),
+                    (big"1234567.8", "1.23457e+06"),
+                    (big"123456.78", "123457"),
+                    (big"12345.678", "12345.7"))
+        @test (Prints.@sprintf("%.6g", val) == res)
+    end
+    for (fmt, val) in (("%10.5g", "     123.4"),
+                    ("%+10.5g", "    +123.4"),
+                    ("% 10.5g","     123.4"),
+                    ("%#10.5g", "    123.40"),
+                    ("%-10.5g", "123.4     "),
+                    ("%-+10.5g", "+123.4    "),
+                    ("%010.5g", "00000123.4")),
+        num in (123.4, big"123.4")
+        @test Prints.format(Prints.Format(fmt), num) == val
+    end
+    @test( Prints.@sprintf( "%10.5g", -123.4 ) == "    -123.4")
+    @test( Prints.@sprintf( "%010.5g", -123.4 ) == "-0000123.4")
+    @test( Prints.@sprintf( "%.6g", 12340000.0 ) == "1.234e+07")
+    @test( Prints.@sprintf( "%#.6g", 12340000.0 ) == "1.23400e+07")
+    @test( Prints.@sprintf( "%10.5g", big"-123.4" ) == "    -123.4")
+    @test( Prints.@sprintf( "%010.5g", big"-123.4" ) == "-0000123.4")
+    @test( Prints.@sprintf( "%.6g", big"12340000.0" ) == "1.234e+07")
+    @test( Prints.@sprintf( "%#.6g", big"12340000.0") == "1.23400e+07")
+
+    # %g regression gh #14331
+    @test( Prints.@sprintf( "%.5g", 42) == "42")
+    @test( Prints.@sprintf( "%#.2g", 42) == "42.")
+    @test( Prints.@sprintf( "%#.5g", 42) == "42.000")
+
+    @test Prints.@sprintf("%g", 0.00012) == "0.00012"
+    @test Prints.@sprintf("%g", 0.000012) == "1.2e-05"
+    @test Prints.@sprintf("%g", 123456.7) == "123457"
+    @test Prints.@sprintf("%g", 1234567.8) == "1.23457e+06"
+
+end
 
 @testset "%f" begin
 
@@ -21,8 +95,8 @@ using Test, Prints
     @test (Prints.@sprintf "%+f" NaN) == "NaN"
     @test (Prints.@sprintf "% f" NaN) == "NaN"
     @test (Prints.@sprintf "% #f" NaN) == "NaN"
-    # @test (Prints.@sprintf "%e" big"Inf") == "Inf"
-    # @test (Prints.@sprintf "%e" big"NaN") == "NaN"
+    @test (Prints.@sprintf "%e" big"Inf") == "Inf"
+    @test (Prints.@sprintf "%e" big"NaN") == "NaN"
 
     @test (Prints.@sprintf "%.0f" 3e142) == "29999999999999997463140672961703247153805615792184250659629251954072073858354858644285983761764971823910371920726635399393477049701891710124032"
 
@@ -70,16 +144,16 @@ end
     @test (Prints.@sprintf "%+e" NaN) == "NaN"
     @test (Prints.@sprintf "% e" NaN) == "NaN"
     @test (Prints.@sprintf "% #e" NaN) == "NaN"
-    # @test (Prints.@sprintf "%e" big"Inf") == "Inf"
-    # @test (Prints.@sprintf "%e" big"NaN") == "NaN"
+    @test (Prints.@sprintf "%e" big"Inf") == "Inf"
+    @test (Prints.@sprintf "%e" big"NaN") == "NaN"
 
     # scientific notation
     @test (Prints.@sprintf "%.0e" 3e142) == "3e+142"
     @test (Prints.@sprintf "%#.0e" 3e142) == "3.e+142"
-    # @test (Prints.@sprintf "%.0e" big"3e142") == "3e+142"
-    # @test (Prints.@sprintf "%#.0e" big"3e142") == "3.e+142"
+    @test (Prints.@sprintf "%.0e" big"3e142") == "3e+142"
+    @test (Prints.@sprintf "%#.0e" big"3e142") == "3.e+142"
 
-    # @test (Prints.@sprintf "%.0e" big"3e1042") == "3e+1042"
+    @test (Prints.@sprintf "%.0e" big"3e1042") == "3e+1042"
 
     @test (Prints.@sprintf "%e" 3e42) == "3.000000e+42"
     @test (Prints.@sprintf "%E" 3e42) == "3.000000E+42"
@@ -148,18 +222,18 @@ end
     @test (Prints.@sprintf "%-8s" "test") == "test    "
 
     @test (Prints.@sprintf "%s" :test) == "test"
-    # @test (Prints.@sprintf "%#s" :test) == ":test"
-    # @test (Prints.@sprintf "%#8s" :test) == "   :test"
-    # @test (Prints.@sprintf "%#-8s" :test) == ":test   "
+    @test (Prints.@sprintf "%#s" :test) == ":test"
+    @test (Prints.@sprintf "%#8s" :test) == "   :test"
+    @test (Prints.@sprintf "%#-8s" :test) == ":test   "
 
     @test (Prints.@sprintf "%8.3s" "test") == "     tes"
-    # @test (Prints.@sprintf "%#8.3s" "test") == "     \"te"
+    @test (Prints.@sprintf "%#8.3s" "test") == "     \"te"
     @test (Prints.@sprintf "%-8.3s" "test") == "tes     "
-    # @test (Prints.@sprintf "%#-8.3s" "test") == "\"te     "
+    @test (Prints.@sprintf "%#-8.3s" "test") == "\"te     "
     @test (Prints.@sprintf "%.3s" "test") == "tes"
-    # @test (Prints.@sprintf "%#.3s" "test") == "\"te"
+    @test (Prints.@sprintf "%#.3s" "test") == "\"te"
     @test (Prints.@sprintf "%-.3s" "test") == "tes"
-    # @test (Prints.@sprintf "%#-.3s" "test") == "\"te"
+    @test (Prints.@sprintf "%#-.3s" "test") == "\"te"
 
 end
 
@@ -213,7 +287,49 @@ end
     @test_throws ArgumentError Prints.Format("%\u0f00%d")
     @test_throws ArgumentError Prints.Format("%\U0001ffff%d")
     @test Prints.@sprintf("%10.5d", 4) == "     00004"
+    @test (Prints.@sprintf "%d" typemax(Int64)) == "9223372036854775807"
 
+    for (fmt, val) in (("%7.2f", "   1.23"),
+                   ("%-7.2f", "1.23   "),
+                   ("%07.2f", "0001.23"),
+                   ("%.0f", "1"),
+                   ("%#.0f", "1."),
+                   ("%.4e", "1.2345e+00"),
+                   ("%.4E", "1.2345E+00"),
+                   ("%.2a", "0x1.3cp+0"),
+                   ("%.2A", "0X1.3CP+0")),
+        num in (1.2345, big"1.2345")
+        @test Prints.format(Prints.Format(fmt), num) == val
+    end
+
+    # reasonably complex
+    @test (Prints.@sprintf "Test: %s%c%C%c%#-.0f." "t" 65 66 67 -42) == "Test: tABC-42.."
+
+    # combo
+    @test (Prints.@sprintf "%f %d %d %f" 1.0 [3 4]... 5) == "1.000000 3 4 5.000000"
+
+    # multi
+    @test (Prints.@sprintf "%s %f %9.5f %d %d %d %d%d%d%d" [1:6;]... [7,8,9,10]...) == "1 2.000000   3.00000 4 5 6 78910"
+
+    # comprehension
+    @test (Prints.@sprintf "%s %s %s %d %d %d %f %f %f" Any[10^x+y for x=1:3,y=1:3 ]...) == "11 101 1001 12 102 1002 13.000000 103.000000 1003.000000"
+
+    # Check bug with trailing nul printing BigFloat
+    @test (Prints.@sprintf("%.330f", BigFloat(1)))[end] != '\0'
+
+    # issue #29662
+    @test (Prints.@sprintf "%12.3e" pi*1e100) == "  3.142e+100"
+
+    @test string(Prints.Format("%a").formats[1]) == "%a"
+    @test string(Prints.Format("%a").formats[1]; bigfloat=true) == "%Ra"
+
+    @test Prints.@sprintf("%d", 3.14) == "3"
+    @test Prints.@sprintf("%2d", 3.14) == " 3"
+    @test Prints.@sprintf("%2d", big(3.14)) == " 3"
+    @test Prints.@sprintf("%s", 1) == "1"
+    @test Prints.@sprintf("%f", 1) == "1.000000"
+    @test Prints.@sprintf("%e", 1) == "1.000000e+00"
+    @test Prints.@sprintf("%g", 1) == "1"
 end
 
 @testset "integers" begin
@@ -489,111 +605,3 @@ end
     @test Prints.@sprintf("%20.X",  UInt(0)) == "                   0"
 
 end
-
-# # printf
-# # int
-# @test (@sprintf "%d" typemax(Int64)) == "9223372036854775807"
-# @test (@sprintf "%a" typemax(Int64)) == "0x7.fffffffffffffffp+60"
-# @test (@sprintf "%A" typemax(Int64)) == "0X7.FFFFFFFFFFFFFFFP+60"
-
-# # pointers
-# if Sys.WORD_SIZE == 64
-#     @test (@sprintf "%20p" 0) == "  0x0000000000000000"
-#     @test (@sprintf "%-20p" 0) == "0x0000000000000000  "
-# elseif Sys.WORD_SIZE == 32
-#     @test (@sprintf "%20p" 0) == "          0x00000000"
-#     @test (@sprintf "%-20p" 0) == "0x00000000          "
-# end
-
-# # float / BigFloat
-# for (fmt, val) in (("%7.2f", "   1.23"),
-#                    ("%-7.2f", "1.23   "),
-#                    ("%07.2f", "0001.23"),
-#                    ("%.0f", "1"),
-#                    ("%#.0f", "1."),
-#                    ("%.4e", "1.2345e+00"),
-#                    ("%.4E", "1.2345E+00"),
-#                    ("%.2a", "0x1.3cp+0"),
-#                    ("%.2A", "0X1.3CP+0")),
-#       num in (1.2345, big"1.2345")
-#     @test @eval(@sprintf($fmt, $num) == $val)
-# end
-
-# # %g
-# for (val, res) in ((12345678., "1.23457e+07"),
-#                    (1234567.8, "1.23457e+06"),
-#                    (123456.78, "123457"),
-#                    (12345.678, "12345.7"),
-#                    (12340000.0, "1.234e+07"))
-#     @test (@sprintf("%.6g", val) == res)
-# end
-# for (val, res) in ((big"12345678.", "1.23457e+07"),
-#                    (big"1234567.8", "1.23457e+06"),
-#                    (big"123456.78", "123457"),
-#                    (big"12345.678", "12345.7"))
-#     @test (@sprintf("%.6g", val) == res)
-# end
-# for (fmt, val) in (("%10.5g", "     123.4"),
-#                    ("%+10.5g", "    +123.4"),
-#                    ("% 10.5g","     123.4"),
-#                    ("%#10.5g", "    123.40"),
-#                    ("%-10.5g", "123.4     "),
-#                    ("%-+10.5g", "+123.4    "),
-#                    ("%010.5g", "00000123.4")),
-#       num in (123.4, big"123.4")
-#     @test @eval(@sprintf($fmt, $num) == $val)
-# end
-# @test( @sprintf( "%10.5g", -123.4 ) == "    -123.4")
-# @test( @sprintf( "%010.5g", -123.4 ) == "-0000123.4")
-# @test( @sprintf( "%.6g", 12340000.0 ) == "1.234e+07")
-# @test( @sprintf( "%#.6g", 12340000.0 ) == "1.23400e+07")
-# @test( @sprintf( "%10.5g", big"-123.4" ) == "    -123.4")
-# @test( @sprintf( "%010.5g", big"-123.4" ) == "-0000123.4")
-# @test( @sprintf( "%.6g", big"12340000.0" ) == "1.234e+07")
-# @test( @sprintf( "%#.6g", big"12340000.0") == "1.23400e+07")
-
-# # %g regression gh #14331
-# @test( @sprintf( "%.5g", 42) == "42")
-# @test( @sprintf( "%#.2g", 42) == "42.")
-# @test( @sprintf( "%#.5g", 42) == "42.000")
-
-# # hex float
-# @test (@sprintf "%a" 1.5) == "0x1.8p+0"
-# @test (@sprintf "%a" 1.5f0) == "0x1.8p+0"
-# @test (@sprintf "%a" big"1.5") == "0x1.8p+0"
-# @test (@sprintf "%#.0a" 1.5) == "0x2.p+0"
-# @test (@sprintf "%+30a" 1/3) == "         +0x1.5555555555555p-2"
-
-# # argument count
-# @test_me ArgumentError("@sprintf: wrong number of arguments (0) should be (1)") @macroexpand(@sprintf "%s")
-# @test_me ArgumentError("@sprintf: wrong number of arguments (2) should be (1)") @macroexpand(@sprintf "%s" "1" "2")
-
-# # reasonably complex
-# @test (@sprintf "Test: %s%c%C%c%#-.0f." "t" 65 66 67 -42) == "Test: tABC-42.."
-
-# # invalid format specifiers, not "diouxXDOUeEfFgGaAcCsSpn"
-# for c in "bBhHIjJkKlLmMNPqQrRtTvVwWyYzZ"
-#     fmt_str = string("%", c)
-#     @test_me ArgumentError("@sprintf: first argument must be a format string") @macroexpand(@sprintf $fmt_str 1)
-# end
-
-# # combo
-# @test (@sprintf "%f %d %d %f" 1.0 [3 4]... 5) == "1.000000 3 4 5.000000"
-
-# # multi
-# @test (@sprintf "%s %f %9.5f %d %d %d %d%d%d%d" [1:6;]... [7,8,9,10]...) == "1 2.000000   3.00000 4 5 6 78910"
-
-# # comprehension
-# @test (@sprintf "%s %s %s %d %d %d %f %f %f" Any[10^x+y for x=1:3,y=1:3 ]...) == "11 101 1001 12 102 1002 13.000000 103.000000 1003.000000"
-
-# # @printf
-# @test_me ArgumentError("@printf: first or second argument must be a format string") @macroexpand(@printf 1)
-
-# # Check bug with trailing nul printing BigFloat
-# @test (@sprintf("%.330f", BigFloat(1)))[end] != '\0'
-
-# # test at macro execution time
-# @test_throws ArgumentError("@sprintf: wrong number of arguments (2) should be (3)") (@sprintf "%d%d%d" 1:2...)
-
-# # issue #29662
-# @test (@sprintf "%12.3e" pi*1e100) == "  3.142e+100"

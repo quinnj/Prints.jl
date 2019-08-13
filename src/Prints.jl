@@ -539,15 +539,16 @@ function format(f::Format, args...) # => String
     return unsafe_string(pointer(buf), pos-1)
 end
 
-macro printf(io_or_fmt, fmt_or_first_arg, args...)
+macro printf(io_or_fmt, args...)
     if io_or_fmt isa String
         io = stdout
         fmt = Format(io_or_fmt)
-        return esc(:(Prints.format($io, $fmt, $fmt_or_first_arg, $(args...))))
+        return esc(:(Prints.format($io, $fmt, $(args...))))
     else
         io = io_or_fmt
-        fmt = Format(fmt_or_first_arg)
-        return esc(:(Prints.format($io, $fmt, $(args...))))
+        isempty(args) && throw(ArgumentError("must provide required format string"))
+        fmt = Format(args[1])
+        return esc(:(Prints.format($io, $fmt, $(Base.tail(args)...))))
     end
 end
 

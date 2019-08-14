@@ -487,11 +487,14 @@ fmt(buf, pos, arg, spec::Spec{Pointer}) = fmt(buf, pos, Int(arg), ptrfmt(spec, a
     return pos
 end
 
-plength(f::Spec{T}, x::Real) where {T} = max(f.width, f.precision, plength(x)) + plength(T)
-plength(f, x::AbstractString) = max(f.width, min(f.precision == -1 ? sizeof(x) : f.precision, sizeof(x)))
+plength(f::Spec{T}, x::Integer) where {T} = max(f.width, f.precision, plength(x)) + plength(T) + f.hash + (x < 0 || (f.plus | f.space))
+plength(f::Spec{T}, x::Real) where {T} = max(f.width, plength(x)) + plength(T) + f.hash + (x < 0 || (f.plus | f.space)) + f.precision
+plength(f, x::AbstractString) = max(f.width, min(f.precision == -1 ? sizeof(x) : f.precision, sizeof(x))) + (sizeof(x) - length(x))
 plength(f, x) = max(f.width, plength(x))
 
-plength(::Type{T}) where {T <: Union{Val{'o'}, HexBases}} = 2
+plength(::Type{T}) where {T <: Union{Val{'o'}, Val{'x'}, Val{'X'}}} = 2
+plength(::Type{T}) where {T <: Floats} = 2
+plength(::Type{T}) where {T <: Union{Val{'e'}, Val{'E'}}} = 4
 plength(::Type{T}) where {T} = 0
 
 plength(x::Float16) = 9 + 5
@@ -505,7 +508,7 @@ plength(p::Ptr) = 2 * sizeof(p) + 2
 plength(x) = 10
 
 @inline function preallocate(f, args...)
-    len = sum(sizeof, f.substrings)
+    len = sum(length, f.substrings)
     N = length(f.formats)
     # unroll up to 8 formats
     Base.@nexprs 8 i -> begin

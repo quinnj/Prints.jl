@@ -21,10 +21,10 @@ struct Spec{T} # T => %type => Val{'type'}
     precision::Int
 end
 
-Base.string(f::Spec{T}; bigfloat::Bool=false) where {T} =
+Base.string(f::Spec{T}; modifier::String="") where {T} =
     string("%", f.leftalign ? "-" : "", f.plus ? "+" : "", f.space ? " " : "",
         f.zero ? "0" : "", f.hash ? "#" : "", f.width > 0 ? f.width : "",
-        f.precision == 0 ? ".0" : f.precision > 0 ? ".$(f.precision)" : "", bigfloat ? "R" : "", char(T))
+        f.precision == 0 ? ".0" : f.precision > 0 ? ".$(f.precision)" : "", modifier, char(T))
 Base.show(io::IO, f::Spec) = print(io, string(f))
 
 ptrfmt(s::Spec{T}, x) where {T} =
@@ -32,13 +32,11 @@ ptrfmt(s::Spec{T}, x) where {T} =
 
 struct Format{S, T}
     str::S
-    substrings::Vector{UnitRange{Int}}
+    substringranges::Vector{UnitRange{Int}}
     formats::T # Tuple of Specs
 end
 
-base(::Type{T}) where {T <: HexBases} = 16
-base(::Type{Val{'o'}}) = 8
-base(x) = 10
+base(T) = T <: HexBases ? 16 : T <: Val{'o'} ? 8 : 10
 char(::Type{Val{c}}) where {c} = c
 
 # parse format string
@@ -313,17 +311,42 @@ end
 end
 
 # floats
+"""
+    Printf.tofloat(x)
+
+Convert an argument to a Base float type for printf formatting.
+By default, arguments are converted to `Float64` via `Float64(x)`.
+Custom numeric types that have a conversion to a Base float type
+that wish to hook into printf formatting can extend this method like:
+
+```julia
+Printf.tofloat(x::MyCustomType) = convert_my_custom_type_to_float(x)
+```
+
+For arbitrary precision numerics, you might extend the method like:
+
+```julia
+Printf.tofloat(x::MyArbitraryPrecisionType) = BigFloat(x)
+```
+"""
+tofloat(x) = Float64(x)
+tofloat(x::Base.IEEEFloat) = x
+tofloat(x::BigFloat) = x
+
 @inline function fmt(buf, pos, arg, spec::Spec{T}) where {T <: Floats}
     leftalign, plus, space, zero, hash, width, prec =
         spec.leftalign, spec.plus, spec.space, spec.zero, spec.hash, spec.width, spec.precision
-    if arg isa BigFloat && !isnan(arg) && isfinite(arg)
-        lng = ccall((:mpfr_snprintf, :libmpfr), Int32,
+    x = tofloat(arg)
+    if x isa BigFloat && !isnan(x) && isfinite(x)
+        ptr = pointer(buf, pos)
+        newpos = ccall((:mpfr_snprintf, :libmpfr), Int32,
                 (Ptr{UInt8}, Culong, Ptr{UInt8}, Ref{BigFloat}),
-                buf, length(buf), string(spec, bigfloat=true), arg)
-        lng > 0 || error("invalid printf formatting for BigFloat")
-        return lng + 1
+                ptr, length(buf), string(spec; modifier="R"), arg)
+        newpos > 0 || error("invalid printf formatting for BigFloat")
+        return pos + newpos
+    elseif x isa BigFloat
+        x = Float64(x)
     end
-    x = Float64(arg)
     if T <: Union{Val{'e'}, Val{'E'}}
         newpos = Ryu.writeexp(buf, pos, x, plus, space, hash, prec, char(T), UInt8('.'))
     elseif T <: Union{Val{'f'}, Val{'F'}}
@@ -437,13 +460,13 @@ end
                 ex = (arg < 0 || (plus | space)) + (T <: Union{Val{'a'}, Val{'A'}} ? 2 : 0)
                 so = pos + ex
                 len = (newpos - pos) - ex
-                unsafe_copyto!(buf, so + n, buf, so, len)
+                copyto!(buf, so + n, buf, so, len)
                 for i = so:(so + n - 1)
                     buf[i] = UInt8('0')
                 end
                 newpos += n
             else
-                unsafe_copyto!(buf, pos + n, buf, pos, newpos - pos)
+                copyto!(buf, pos + n, buf, pos, newpos - pos)
                 for i = pos:(pos + n - 1)
                     buf[i] = UInt8(' ')
                 end
@@ -459,8 +482,8 @@ fmt(buf, pos, arg, spec::Spec{Pointer}) = fmt(buf, pos, Int(arg), ptrfmt(spec, a
 
 @inline function format(buf::Vector{UInt8}, pos::Integer, f::Format, args...)
     # write out first substring
-    for i in f.substrings[1]
-        @inbounds buf[pos] = f.str[i]
+    for i in f.substringranges[1]
+        buf[pos] = f.str[i]
         pos += 1
     end
     # for each format, write out arg and next substring
@@ -469,7 +492,7 @@ fmt(buf, pos, arg, spec::Spec{Pointer}) = fmt(buf, pos, Int(arg), ptrfmt(spec, a
     Base.@nexprs 8 i -> begin
         if N >= i
             pos = fmt(buf, pos, args[i], f.formats[i])
-            for j in f.substrings[i + 1]
+            for j in f.substringranges[i + 1]
                 buf[pos] = f.str[j]
                 pos += 1
             end
@@ -478,8 +501,8 @@ fmt(buf, pos, arg, spec::Spec{Pointer}) = fmt(buf, pos, Int(arg), ptrfmt(spec, a
     if N > 8
         for i = 9:length(f.formats)
             pos = fmt(buf, pos, args[i], f.formats[i])
-            for j in f.substrings[i + 1]
-                @inbounds buf[pos] = f.str[j]
+            for j in f.substringranges[i + 1]
+                buf[pos] = f.str[j]
                 pos += 1
             end
         end
@@ -487,38 +510,41 @@ fmt(buf, pos, arg, spec::Spec{Pointer}) = fmt(buf, pos, Int(arg), ptrfmt(spec, a
     return pos
 end
 
-plength(f::Spec{T}, x::Integer) where {T} = max(f.width, f.precision, plength(x)) + plength(T) + f.hash + (x < 0 || (f.plus | f.space))
-plength(f::Spec{T}, x::Real) where {T} = max(f.width, plength(x)) + plength(T) + f.hash + (x < 0 || (f.plus | f.space)) + f.precision
-plength(f, x::AbstractString) = max(f.width, min(f.precision == -1 ? sizeof(x) : f.precision, sizeof(x))) + (sizeof(x) - length(x))
-plength(f, x) = max(f.width, plength(x))
+plength(f::Spec{T}, x) where {T <: Chars} = max(f.width, 1) + (ncodeunits(x isa AbstractString ? x[1] : Char(x)) - 1)
+plength(f::Spec{Pointer}, x) = max(f.width, 2 * sizeof(x) + 2)
 
-plength(::Type{T}) where {T <: Union{Val{'o'}, Val{'x'}, Val{'X'}}} = 2
-plength(::Type{T}) where {T <: Floats} = 2
-plength(::Type{T}) where {T <: Union{Val{'e'}, Val{'E'}}} = 4
-plength(::Type{T}) where {T} = 0
+function plength(f::Spec{T}, x) where {T <: Strings}
+    str = string(x)
+    p = f.precision == -1 ? (length(str) + (f.hash ? (x isa Symbol ? 1 : 2) : 0)) : f.precision
+    return max(f.width, p) + (sizeof(str) - length(str))
+end
 
-plength(x::Float16) = 9 + 5
-plength(x::Float32) = 39 + 9
-plength(x::Union{Float64, BigFloat}) = 309 + 17
-plength(x::Real) = plength(float(x))
-plength(x::Integer) = ndigits(x, base=10)
-plength(c::Char) = ncodeunits(c)
-plength(s::AbstractString) = sizeof(s)
-plength(p::Ptr) = 2 * sizeof(p) + 2
-plength(x) = 10
+function plength(f::Spec{T}, x) where {T <: Ints}
+    x2 = x isa AbstractFloat ? Integer(trunc(x)) : x
+    return max(f.width, f.precision + ndigits(x2, base=base(T), pad=1) + 5)
+end
 
-@inline function preallocate(f, args...)
-    len = sum(length, f.substrings)
-    N = length(f.formats)
+function plength(f::Spec{T}, x) where {T <: Floats}
+    x2 = tofloat(x)
+    if x2 isa BigFloat
+        return Base.MPFR._calculate_buffer_size!(Base.StringVector(0), string(f), x) + 3
+    else
+        return max(f.width, f.precision + 309 + 17 + f.hash + 5)
+    end
+end
+
+@inline function computelen(substringranges, formats, args)
+    len = sum(length, substringranges)
+    N = length(formats)
     # unroll up to 8 formats
     Base.@nexprs 8 i -> begin
         if N >= i
-            len += plength(f.formats[i], args[i])
+            len += plength(formats[i], args[i])
         end
     end
     if N > 8
-        for i = 9:length(f.formats)
-            len += plength(f.formats[i], args[i])
+        for i = 9:length(formats)
+            len += plength(formats[i], args[i])
         end
     end
     return len
@@ -529,17 +555,17 @@ end
 
 function format(io::IO, f::Format, args...) # => Nothing
     length(args) == length(f.formats) || argmismatch(length(args), length(f.formats))
-    buf = Vector{UInt8}(undef, preallocate(f, args...))
+    buf = Base.StringVector(computelen(f.substringranges, f.formats, args))
     pos = format(buf, 1, f, args...)
-    GC.@preserve buf unsafe_write(io, pointer(buf), pos - 1)
+    write(io, resize!(buf, pos - 1))
     return
 end
 
 function format(f::Format, args...) # => String
     length(args) == length(f.formats) || argmismatch(length(args), length(f.formats))
-    buf = Vector{UInt8}(undef, preallocate(f, args...))
+    buf = Base.StringVector(computelen(f.substringranges, f.formats, args))
     pos = format(buf, 1, f, args...)
-    return unsafe_string(pointer(buf), pos-1)
+    return String(resize!(buf, pos - 1))
 end
 
 macro printf(io_or_fmt, args...)

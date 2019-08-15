@@ -321,7 +321,7 @@ end
     @test (Prints.@sprintf "%12.3e" pi*1e100) == "  3.142e+100"
 
     @test string(Prints.Format("%a").formats[1]) == "%a"
-    @test string(Prints.Format("%a").formats[1]; bigfloat=true) == "%Ra"
+    @test string(Prints.Format("%a").formats[1]; modifier="R") == "%Ra"
 
     @test Prints.@sprintf("%d", 3.14) == "3"
     @test Prints.@sprintf("%2d", 3.14) == " 3"

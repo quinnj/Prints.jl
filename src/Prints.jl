@@ -2,7 +2,7 @@ module Prints
 
 using Ryu
 
-export @printf, @sprintf, Format, format, @format
+export @printf, @sprintf, Format, format, @format, tofloat
 
 const Ints = Union{Val{'d'}, Val{'i'}, Val{'u'}, Val{'x'}, Val{'X'}, Val{'o'}}
 const Floats = Union{Val{'e'}, Val{'E'}, Val{'f'}, Val{'F'}, Val{'g'}, Val{'G'}, Val{'a'}, Val{'A'}}
